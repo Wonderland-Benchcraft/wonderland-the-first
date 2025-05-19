@@ -1,0 +1,5 @@
+__pycache__
+simulation_plots
+venv
+neat_config.txt
+/*.pkl

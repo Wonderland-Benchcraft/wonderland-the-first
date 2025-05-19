@@ -1,0 +1,1 @@
+- **Install dependencies**: `pip install neat-python pygame numpy mesa`
