@@ -269,7 +269,7 @@ class EvolvingAgent(Agent):
                     break # Eat only one food item per step
         
         if self.model.schedule.steps - self.last_reproduce > self.attribute_genome.reproduce_cooldown and \
-        random.random() < self.attribute_genome.reproduction_chance:
+        random.random() < self.attribute_genome.reproduction_chance and self.hp > self.attribute_genome.reproduce_hp_damage:
             self.reproduce_asexually()
             self.hp -= self.attribute_genome.reproduce_hp_damage
             self.last_reproduce = self.model.schedule.steps

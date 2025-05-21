@@ -6,7 +6,7 @@ import numpy as np
 import copy # For deepcopying the loaded genome
 
 # Import from the local library package
-from .evolutionary_playground_library import (
+from evolutionary_playground_library import (
     AttributeGenome,
     EvolutionaryWorld,
     eval_genomes_mesa, 
