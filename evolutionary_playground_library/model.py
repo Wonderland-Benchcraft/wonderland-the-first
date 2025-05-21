@@ -1,6 +1,6 @@
 # evolutionary_playground_library/model.py
 import math
-import random
+import numpy as np
 from mesa import Model
 from mesa.time import RandomActivation
 from mesa.space import MultiGrid
@@ -83,6 +83,33 @@ class EvolutionaryWorld(Model):
         self.next_agent_id_counter += 1
         return self.next_agent_id_counter
 
+    def get_agents_median_attributes(self, attribute_genome=False):
+        """
+        Calculates and returns the median values for key attributes of all
+        currently alive EvolvingAgent instances in the simulation.
+        Also includes the median age (steps_survived_this_generation).
+        """
+
+        median_attributes = {}
+        default_value = 0.0 # Or None, if you prefer for missing data
+        agents = self.schedule.agents
+        if attribute_genome:
+            # Attributes from AttributeGenome
+            attribute_genome_keys = ['max_hp', 'aging_coeff', 'speed', 'hp_regen_from_food',
+                                    'action_intensity_decay_rate', 'action_hp_cost_factor']
+            for attr_key in attribute_genome_keys:
+                values = [getattr(agent.attribute_genome, attr_key, default_value) for agent in agents]
+                median_attributes[f'median_{attr_key}'] = np.median(values) if values else default_value
+            
+        # Direct attributes from EvolvingAgent (like current HP and age)
+        direct_agent_attributes = ['steps_survived_this_generation', 'hp', 'food_eaten_this_generation']
+        for attr_key in direct_agent_attributes:
+            values = [getattr(agent, attr_key, default_value) for agent in agents]
+            median_attributes[f'median_{attr_key}'] = np.median(values) if values else default_value
+            
+        median_attributes['count_alive_evolving_agents'] = len(agents)
+        return median_attributes
+    
     def has_agent_class_at(self, x, y, agent_class):
         """
         Checks if there is a Food agent at the given (x, y) coordinates.
@@ -121,13 +148,30 @@ class EvolutionaryWorld(Model):
             if is_clear:
                 return neighbor_pos
                 
+    def get_norm_distance_betwen_2_positions(self, agent1, agent2, dist=None):
+        if not dist:
+            #calculate distance between 2 positions
+            #Not my case when coding this :P
+            return (0.0, 0.0, 0.0)
+        
+         # Normalize distance by the maximum possible distance on the grid (diagonal)
+        max_grid_dist = math.sqrt(self.grid.width**2 + self.grid.height**2)
+        nearest_dist_norm = dist / max_grid_dist if max_grid_dist > 0 else 0.0
+        nearest_dist_norm = min(1.0, nearest_dist_norm) # Clamp
+
+        # Normalized direction vector to food (if distance > 0)
+        if dist > 0:
+            nearest_dx_norm = (agent1.pos[0] - agent2.pos[0]) / dist
+            nearest_dy_norm = (agent1.pos[1] - agent2.pos[1]) / dist
+
+        return (nearest_dist_norm, nearest_dx_norm, nearest_dy_norm)
     
-    def get_nearest_agent_of_class(self, current_agent_pos, target_class, search_radius=None):
+    def get_nearest_agent_of_class(self, current_agent, target_class, search_radius=None):
         """
         Finds the nearest agent of a specific class to a given position.
 
         Args:
-            current_agent_pos (tuple): The (x, y) position of the agent performing the search.
+            current_agent (Agent): The Agent Class to search from.
             target_class (class): The class of the agent to search for (e.g., Food, EvolvingAgent).
             search_radius (int, optional): If provided, limits the search to this radius.
                                            If None, searches the entire grid.
@@ -147,7 +191,7 @@ class EvolutionaryWorld(Model):
             # If target_class could be the agent itself, set include_center=True
             # or handle separately.
             possible_targets = self.grid.get_neighbors(
-                current_agent_pos,
+                current_agent.pos,
                 moore=True, # Moore neighborhood (includes diagonals)
                 include_center=True, # Check own cell too, in case target can be at same pos
                 radius=search_radius
@@ -161,7 +205,7 @@ class EvolutionaryWorld(Model):
         for agent in possible_targets:
             if isinstance(agent, target_class) and agent.pos is not None:
                 # Ensure it's not the agent itself, unless target_class could be its own type and it's allowed
-                if agent.pos == current_agent_pos and agent is self.schedule.agents[self.schedule.agents.index(agent) if agent in self.schedule.agents else -1] and current_agent_pos == agent.pos: # a bit convoluted to check if it's the agent itself
+                if agent.pos == current_agent.pos and agent.unique_id == current_agent.unique_id: # a bit convoluted to check if it's the agent itself
                      # If searching for EvolvingAgent, don't return self unless explicitly desired.
                      # This check might need refinement based on how unique_id vs object identity is handled.
                      # For simplicity, if we are looking for other agents, we can skip if positions are identical.
@@ -170,10 +214,10 @@ class EvolutionaryWorld(Model):
                      # For now, let's assume we are looking for *other* agents or items.
                      # If the agent looking is `searcher_agent`, then:
                      # if agent.unique_id == searcher_agent.unique_id: continue
-                     pass # Allow finding agent in own cell if not the searcher itself.
+                    continue
 
-                dx = agent.pos[0] - current_agent_pos[0]
-                dy = agent.pos[1] - current_agent_pos[1]
+                dx = agent.pos[0] - current_agent.pos[0]
+                dy = agent.pos[1] - current_agent.pos[1]
                 dist_sq = dx**2 + dy**2
 
                 if dist_sq < min_dist_sq:
@@ -197,7 +241,7 @@ class EvolutionaryWorld(Model):
                 for y in range(self.grid.height):
                     # A slightly random varioation food spawn change
                     #TODO: Move to a better place
-                    if self.random.random() < random.uniform(0.0, 0.6/self.food_spawn_probability) * self.food_spawn_probability:
+                    if self.random.random() < self.food_spawn_probability:
                         current_cell_contents = self.grid.get_cell_list_contents([(x,y)])
                         # Spawn food only if cell doesn't contain an EvolvingAgent
                         if not any(isinstance(agent, EvolvingAgent) for agent in current_cell_contents):

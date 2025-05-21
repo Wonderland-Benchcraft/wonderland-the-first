@@ -386,8 +386,8 @@ def run_simulation(neat_config_filepath,
 
 
 if __name__ == '__main__':
-    num_nn_inputs = 6
-    num_nn_outputs = 2
+    num_nn_inputs = 9
+    num_nn_outputs = 3
     ensure_neat_config(
         config_path=sim_config.NEAT_CONFIG_FILENAME,
         pop_size=sim_config.DEFAULT_INITIAL_AGENT_COUNT, 

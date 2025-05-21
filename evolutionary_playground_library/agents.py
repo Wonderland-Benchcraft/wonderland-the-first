@@ -8,7 +8,8 @@ from .config import (VIS_FOOD_COLOR, FITNESS_SURVIVAL_WEIGHT,
                      FITNESS_FOOD_WEIGHT, FITNESS_HP_BONUS_WEIGHT,
                      FOOD_REPRODUCE_PROBABILITY, FOOD_REPRODUCE_STEP_AGE,
                      POSTMORTEM_FOOD_HP_COEF, FOOD_HP_COEF, VIS_POSTMORTEN_FOOD_COLOR,
-                     ATTR_MUTATION_RATE, ATTR_MUTATION_STRENGTH)
+                     ATTR_MUTATION_RATE, ATTR_MUTATION_STRENGTH, 
+                     FITNESS_SURVIVAL_MEDIAN_WEIGHT, FITNESS_FOOD_MEDIAN_WEIGHT)
 
 # Pygame is an optional dependency for drawing, only import if needed for type hinting or direct use
 try:
@@ -33,6 +34,7 @@ class EvolvingAgent(Agent):
         """
         super().__init__(unique_id, model)
         self.neat_genome_id, self.neat_genome = neat_genome_tuple
+        self.neat_genome_tuple = neat_genome_tuple
         # Create the neural network from the NEAT genome and configuration
         self.net = neat.nn.FeedForwardNetwork.create(self.neat_genome, model.neat_config_obj)
         self.attribute_genome = attribute_genome
@@ -65,35 +67,67 @@ class EvolvingAgent(Agent):
         norm_age = min(1.0, self.age / 100.0)
 
         # Sensor for nearest food: (dx_normalized, dy_normalized, distance_normalized)
-        nearest_food_dx_norm = 0.0
-        nearest_food_dy_norm = 0.0
-        nearest_food_dist_norm = 1.0 # Max distance (normalized) if no food found
-        nearest_food_type_norm = 1
-        
+        (
+            nearest_food_norm_dist,
+            nearest_food_norm_dx,
+            nearest_food_norm_dy,
+            nearest_food_norm_type
+        ) = (1.0, 0.0, 0.0, -1)
+
+        (
+            nearest_evolving_norm_dist,
+            nearest_evolving_norm_dx,
+            nearest_evolving_norm_dy,
+        ) = (1.0, 0.0, 0.0)
+
         if self.pos is None: # Agent might have been removed from grid
-            return (norm_hp, norm_age, nearest_food_dist_norm, nearest_food_dx_norm, nearest_food_dy_norm, 0)
+            return (
+                norm_hp,
+                norm_age,
+                nearest_food_norm_dist,
+                nearest_food_norm_dx,
+                nearest_food_norm_dy,
+                nearest_food_norm_type,
+                nearest_evolving_norm_dist,
+                nearest_evolving_norm_dx,
+                nearest_evolving_norm_dy,
+            )
 
         # Iterate through food items on the grid to find the nearest one
-        closest_food, dist = self.model.get_nearest_agent_of_class(self.pos, (Food, PostMortemFood))
+        closest_food, dist = self.model.get_nearest_agent_of_class(self, (Food, PostMortemFood), 20)
         if closest_food:
-            # Normalize distance by the maximum possible distance on the grid (diagonal)
-            max_grid_dist = math.sqrt(self.model.grid.width**2 + self.model.grid.height**2)
-            nearest_food_dist_norm = dist / max_grid_dist if max_grid_dist > 0 else 0.0
-            nearest_food_dist_norm = min(1.0, nearest_food_dist_norm) # Clamp
+            (
+                nearest_food_norm_dist,
+                nearest_food_norm_dx,
+                nearest_food_norm_dy,
+            ) = self.model.get_norm_distance_betwen_2_positions(closest_food, self, dist)
 
-            # Normalized direction vector to food (if distance > 0)
-            if dist > 0:
-                nearest_food_dx_norm = (closest_food.pos[0] - self.pos[0]) / dist
-                nearest_food_dy_norm = (closest_food.pos[1] - self.pos[1]) / dist
-            # If on top of food, direction is (0,0)
             for index, food_agent in enumerate(recon_map):
                 if isinstance( closest_food , food_agent):
-                    nearest_food_type_norm = index/len(recon_map)
+                    nearest_food_norm_type = index/len(recon_map)
+        
+        closest_evolving_agent, agent_dist = self.model.get_nearest_agent_of_class(self, (EvolvingAgent), 30)
+        if closest_evolving_agent:
+            (
+            nearest_evolving_norm_dist,
+            nearest_evolving_norm_dx,
+            nearest_evolving_norm_dy,
+        ) = self.model.get_norm_distance_betwen_2_positions(closest_evolving_agent, self, agent_dist)
                 
         # The NEAT config's `num_inputs` must match the number of elements in this tuple.
-        return (norm_hp, norm_age, nearest_food_dist_norm, nearest_food_dx_norm, nearest_food_dy_norm, nearest_food_type_norm)
+        return (
+                norm_hp,
+                norm_age,
+                nearest_food_norm_dist,
+                nearest_food_norm_dx,
+                nearest_food_norm_dy,
+                nearest_food_norm_type,
+                nearest_evolving_norm_dist,
+                nearest_evolving_norm_dx,
+                nearest_evolving_norm_dy,
+            )
 
-    def get_current_action_intensity(self):
+    def get_current_action_intensity(self, predicted_intensiy):
 
         """
         Calculates the agent's current action intensity, which decays with age.
@@ -104,17 +138,26 @@ class EvolvingAgent(Agent):
         Returns:
             float: The current action intensity (between 0.1 and 1.0).
         """
-        intensity = 1.0 - (self.age * self.attribute_genome.action_intensity_decay_rate)
+        intensity = predicted_intensiy - (self.age * self.attribute_genome.action_intensity_decay_rate)
         return max(0.1, intensity) # Ensure a minimum intensity
     
     def add_offspring_to_simulation(self, child_neat_genome, child_attribute_genome, spawn_pos):
         offspring_id = self.model.get_new_agent_id()
+        
+        # The child_neat_genome_obj is the NEAT genome object.
+        # We need its ID (key) to form the tuple for EvolvingAgent.__init__
+        neat_genome_id_for_child = child_neat_genome.key if hasattr(child_neat_genome, 'key') else f"offspring_{offspring_id}"
+
+        # **THE FIX IS HERE**: Pass the NEAT genome as a tuple (id, object)
+        offspring_neat_genome_tuple = (neat_genome_id_for_child, child_neat_genome)
+
         offspring = EvolvingAgent(
             offspring_id,
             self.model,
-            child_neat_genome,
+            offspring_neat_genome_tuple,
             child_attribute_genome)
         
+
         self.model.grid.place_agent(offspring, spawn_pos)
         self.model.schedule.add(offspring)
         self.model.food_items_on_grid += 1
@@ -141,7 +184,7 @@ class EvolvingAgent(Agent):
         
         # Configure by crossing over with self to clone
         child_neat_genome.configure_crossover(self.neat_genome, self.neat_genome, genome_config)
-        child_neat_genome.mutate(self.model.neat_config_obj)
+        child_neat_genome.mutate(genome_config)
 
         # 3. Create and add offspring
         spawn_pos = self.model.get_random_empty_neighborhood_cell(self.pos)
@@ -184,9 +227,10 @@ class EvolvingAgent(Agent):
         # Assuming outputs are in [0,1], map to [-1, 1] for directional signals
         move_x_signal = outputs[0] * 2 - 1
         move_y_signal = outputs[1] * 2 - 1
+        move_intensity = outputs[2]
 
         # 3. Calculate Action and Associated HP Cost
-        current_intensity = self.get_current_action_intensity()
+        current_intensity = self.get_current_action_intensity(move_intensity)
         
         # Effective speed is base speed attribute scaled by current intensity
         effective_speed = self.attribute_genome.speed * current_intensity
@@ -224,11 +268,11 @@ class EvolvingAgent(Agent):
                     self.food_eaten_this_generation += 1
                     break # Eat only one food item per step
         
-        """ if self.model.schedule.steps - self.last_reproduce > self.attribute_genome.reproduce_cooldown and \
+        if self.model.schedule.steps - self.last_reproduce > self.attribute_genome.reproduce_cooldown and \
         random.random() < self.attribute_genome.reproduction_chance:
             self.reproduce_asexually()
             self.hp -= self.attribute_genome.reproduce_hp_damage
-            self.last_reproduce = self.model.schedule.steps """
+            self.last_reproduce = self.model.schedule.steps
             
     def calculate_fitness(self):
         """
@@ -248,6 +292,13 @@ class EvolvingAgent(Agent):
             hp_bonus = (self.hp / self.attribute_genome.max_hp) * FITNESS_HP_BONUS_WEIGHT
             fitness_score += hp_bonus
             
+        generation_median_attributes = self.model.get_agents_median_attributes()
+        
+        if generation_median_attributes:
+            fitness_score += FITNESS_SURVIVAL_MEDIAN_WEIGHT * generation_median_attributes["median_steps_survived_this_generation"]
+            fitness_score += FITNESS_FOOD_MEDIAN_WEIGHT * generation_median_attributes["median_food_eaten_this_generation"]
+        
+        
         return max(0.0, fitness_score) # Ensure fitness is not negative
 
     def draw(self, surface, x_pixel, y_pixel, cell_size):
@@ -307,7 +358,6 @@ class Food(Agent):
             empty_neighbor_cell_pos = self.model.get_random_empty_neighborhood_cell(self.pos)
             
             if not empty_neighbor_cell_pos:
-                print(empty_neighbor_cell_pos)
                 return
             # Add a food point
             food_id = self.model.get_new_agent_id()
