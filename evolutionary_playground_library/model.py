@@ -60,6 +60,11 @@ class EvolutionaryWorld(Model):
         # Stores a list of AttributeGenome prototypes for the next NEAT evaluation round
         self.attribute_genome_prototypes_for_next_eval = []
 
+        # Spatial indexing for performance optimization
+        self.spatial_grid_size = max(10, min(width, height) // 20)
+        self.spatial_grid = {}
+        self.agent_positions = {}  # Cache agent positions
+        
         # Visualization attributes
         self.screen = screen
         self.clock = clock
@@ -68,6 +73,7 @@ class EvolutionaryWorld(Model):
         self.visualization_active = self.screen is not None
         self.pygame_font = None
         self.current_generation_display_num = 0 # ADDED: For displaying current gen number
+        self.dirty_cells = set()  # Track cells that need redrawing
 
         if self.visualization_active and pygame:
             try:
@@ -166,59 +172,63 @@ class EvolutionaryWorld(Model):
 
         return (nearest_dist_norm, nearest_dx_norm, nearest_dy_norm)
     
+    def _get_spatial_key(self, pos):
+        """Get spatial grid key for position."""
+        return (pos[0] // self.spatial_grid_size, pos[1] // self.spatial_grid_size)
+    
+    def _update_spatial_index(self, agent, old_pos=None):
+        """Update agent position in spatial index."""
+        if old_pos is not None:
+            old_key = self._get_spatial_key(old_pos)
+            if old_key in self.spatial_grid and agent in self.spatial_grid[old_key]:
+                self.spatial_grid[old_key].remove(agent)
+                if not self.spatial_grid[old_key]:
+                    del self.spatial_grid[old_key]
+        
+        if agent.pos is not None:
+            new_key = self._get_spatial_key(agent.pos)
+            if new_key not in self.spatial_grid:
+                self.spatial_grid[new_key] = set()
+            self.spatial_grid[new_key].add(agent)
+            self.agent_positions[agent.unique_id] = agent.pos
+
     def get_nearest_agent_of_class(self, current_agent, target_class, search_radius=None):
         """
-        Finds the nearest agent of a specific class to a given position.
-
-        Args:
-            current_agent (Agent): The Agent Class to search from.
-            target_class (class): The class of the agent to search for (e.g., Food, EvolvingAgent).
-            search_radius (int, optional): If provided, limits the search to this radius.
-                                           If None, searches the entire grid.
-
-        Returns:
-            tuple: (nearest_agent, distance) or (None, float('inf')) if no agent of
-                   target_class is found. Distance is Euclidean.
+        Optimized nearest agent search using spatial indexing.
         """
+        if current_agent.pos is None:
+            return None, float('inf')
+            
         nearest_agent_found = None
         min_dist_sq = float('inf')
-
-        # Determine search area
+        
         if search_radius is not None:
-            # Get neighbors within the radius using Mesa's built-in method
-            # include_center=False because the agent is usually not looking for itself
-            # or an agent at its own exact location unless specified.
-            # If target_class could be the agent itself, set include_center=True
-            # or handle separately.
-            possible_targets = self.grid.get_neighbors(
-                current_agent.pos,
-                moore=True, # Moore neighborhood (includes diagonals)
-                include_center=True, # Check own cell too, in case target can be at same pos
-                radius=search_radius
-            )
+            # Use spatial indexing for limited radius searches
+            current_key = self._get_spatial_key(current_agent.pos)
+            search_range = (search_radius // self.spatial_grid_size) + 2
+            
+            possible_targets = set()
+            for dx in range(-search_range, search_range + 1):
+                for dy in range(-search_range, search_range + 1):
+                    check_key = (current_key[0] + dx, current_key[1] + dy)
+                    if check_key in self.spatial_grid:
+                        possible_targets.update(self.spatial_grid[check_key])
         else:
-            # Search all agents in the schedule if no radius is specified
-            # This can be less efficient for large grids/populations.
+            # Fall back to all agents for unlimited search
             possible_targets = self.schedule.agents
-
 
         for agent in possible_targets:
             if isinstance(agent, target_class) and agent.pos is not None:
-                # Ensure it's not the agent itself, unless target_class could be its own type and it's allowed
-                if agent.pos == current_agent.pos and agent.unique_id == current_agent.unique_id: # a bit convoluted to check if it's the agent itself
-                     # If searching for EvolvingAgent, don't return self unless explicitly desired.
-                     # This check might need refinement based on how unique_id vs object identity is handled.
-                     # For simplicity, if we are looking for other agents, we can skip if positions are identical.
-                     # However, multiple agents of the same class can be at the same pos in MultiGrid.
-                     # A robust way is to check unique_id if the searching agent is also of target_class.
-                     # For now, let's assume we are looking for *other* agents or items.
-                     # If the agent looking is `searcher_agent`, then:
-                     # if agent.unique_id == searcher_agent.unique_id: continue
+                if agent.unique_id == current_agent.unique_id:
                     continue
 
                 dx = agent.pos[0] - current_agent.pos[0]
                 dy = agent.pos[1] - current_agent.pos[1]
                 dist_sq = dx**2 + dy**2
+                
+                # Early exit if beyond search radius
+                if search_radius is not None and dist_sq > search_radius**2:
+                    continue
 
                 if dist_sq < min_dist_sq:
                     min_dist_sq = dist_sq
@@ -228,6 +238,53 @@ class EvolutionaryWorld(Model):
             return nearest_agent_found, math.sqrt(min_dist_sq)
         else:
             return None, float('inf')
+
+    def get_nearest_agents_of_class(self, current_agent, target_class, count=5, search_radius=None):
+        """
+        Find the nearest N agents of a specific class using spatial indexing.
+        
+        Returns:
+            list: List of (agent, distance) tuples, sorted by distance (closest first)
+        """
+        if current_agent.pos is None:
+            return []
+            
+        candidates = []
+        
+        if search_radius is not None:
+            # Use spatial indexing for limited radius searches
+            current_key = self._get_spatial_key(current_agent.pos)
+            search_range = (search_radius // self.spatial_grid_size) + 2
+            
+            possible_targets = set()
+            for dx in range(-search_range, search_range + 1):
+                for dy in range(-search_range, search_range + 1):
+                    check_key = (current_key[0] + dx, current_key[1] + dy)
+                    if check_key in self.spatial_grid:
+                        possible_targets.update(self.spatial_grid[check_key])
+        else:
+            # Fall back to all agents for unlimited search
+            possible_targets = self.schedule.agents
+
+        for agent in possible_targets:
+            if isinstance(agent, target_class) and agent.pos is not None:
+                if agent.unique_id == current_agent.unique_id:
+                    continue
+
+                dx = agent.pos[0] - current_agent.pos[0]
+                dy = agent.pos[1] - current_agent.pos[1]
+                dist_sq = dx**2 + dy**2
+                
+                # Early exit if beyond search radius
+                if search_radius is not None and dist_sq > search_radius**2:
+                    continue
+
+                distance = math.sqrt(dist_sq)
+                candidates.append((agent, distance))
+        
+        # Sort by distance and return top N
+        candidates.sort(key=lambda x: x[1])
+        return candidates[:count]
 
 
     def spawn_food(self, num_food_to_spawn=None):
@@ -285,6 +342,11 @@ class EvolutionaryWorld(Model):
         self.current_simulation_step_in_generation = 0
         self.next_agent_id_counter = 0 # Reset agent ID counter for this generation
         self.attribute_genome_fitness_map = {} # Clear fitness map for previous attributes
+        
+        # Reset spatial indexing
+        self.spatial_grid = {}
+        self.agent_positions = {}
+        self.dirty_cells = set()
 
         self.current_neat_genome_tuples = neat_genomes_to_eval_tuples
         self.current_attribute_genomes_map = attribute_genomes_for_eval_map
@@ -307,9 +369,11 @@ class EvolutionaryWorld(Model):
             x = self.random.randrange(self.grid.width)
             y = self.random.randrange(self.grid.height)
             self.grid.place_agent(agent, (x, y))
+            self._update_spatial_index(agent)
+            self.dirty_cells.add((x, y))
             
         # Spawn initial food for the generation (e.g., 10% of grid cells)
-        initial_food_count = int(self.grid.width * self.grid.height * 0.1)
+        initial_food_count = None #int(self.grid.width * self.grid.height * 0.1)
         self.spawn_food(num_food_to_spawn=initial_food_count)
         self.current_simulation_step_in_generation = 0 # Ensure this is reset
 
@@ -318,6 +382,8 @@ class EvolutionaryWorld(Model):
         Helper method to safely remove an agent (typically Food) from the grid and schedule.
         """
         if agent_to_remove.pos: # Check if agent is still on the grid
+            self.dirty_cells.add(agent_to_remove.pos)
+            self._update_spatial_index(agent_to_remove, agent_to_remove.pos)
             self.grid.remove_agent(agent_to_remove)
         if agent_to_remove in self.schedule.agents: # Check if agent is in schedule
             self.schedule.remove(agent_to_remove)
@@ -331,28 +397,49 @@ class EvolutionaryWorld(Model):
         Currently, this just removes them from the grid.
         """
         if agent.pos:
+            self.dirty_cells.add(agent.pos)
             # Make it a food point when dead
             post_morten_food_id = self.get_new_agent_id()
             post_morten_food = PostMortemFood(post_morten_food_id, self)
             self.grid.place_agent(post_morten_food, agent.pos)
             self.schedule.add(post_morten_food) # Add to schedule if food needs to act (not in this case)
             self.food_items_on_grid += 1
+            self._update_spatial_index(post_morten_food)
         
+            self._update_spatial_index(agent, agent.pos)
             self.grid.remove_agent(agent)
         # The agent remains in the schedule until the end of the generation for fitness collection,
         # but its `is_alive` flag prevents further actions.
 
     def draw_world(self):
         """
-        Draws the current state of the simulation world (grid, agents, food)
-        onto the Pygame screen, if visualization is active.
+        Optimized drawing that only redraws changed areas of the simulation.
         """
-        if not self.screen or not pygame: # Skip if no screen or Pygame not available
+        if not self.screen or not pygame:
             return
 
-        self.screen.fill(VIS_BACKGROUND_COLOR) # Clear screen with background color
+        # Only clear and redraw if there are dirty cells or this is the first frame
+        if not hasattr(self, '_first_draw_done'):
+            self.screen.fill(VIS_BACKGROUND_COLOR)
+            self._draw_grid_lines()
+            self._first_draw_done = True
+            # Force redraw everything on first frame
+            for x_grid in range(self.grid.width):
+                for y_grid in range(self.grid.height):
+                    self.dirty_cells.add((x_grid, y_grid))
 
-        # Draw grid lines
+        # Only redraw dirty cells
+        for x_grid, y_grid in self.dirty_cells:
+            self._draw_cell(x_grid, y_grid)
+        
+        self.dirty_cells.clear()
+        
+        # Always update metrics overlay
+        self._draw_metrics_overlay()
+        pygame.display.flip()
+
+    def _draw_grid_lines(self):
+        """Draw the grid lines once."""
         for x_coord in range(self.grid.width + 1):
             pygame.draw.line(self.screen, VIS_GRID_COLOR, 
                              (x_coord * self.cell_size, 0), 
@@ -362,34 +449,50 @@ class EvolutionaryWorld(Model):
                              (0, y_coord * self.cell_size), 
                              (self.grid.width * self.cell_size, y_coord * self.cell_size))
 
-        # Draw agents and food items by iterating through grid cells
-        for cell_content_list, (x_grid, y_grid) in self.grid.coord_iter():
-            x_pixel_coord = x_grid * self.cell_size
-            y_pixel_coord = y_grid * self.cell_size
-            for agent_in_cell in cell_content_list:
-                if hasattr(agent_in_cell, 'draw'): # Check if the agent has a draw method
-                    agent_in_cell.draw(self.screen, x_pixel_coord, y_pixel_coord, self.cell_size)
+    def _draw_cell(self, x_grid, y_grid):
+        """Draw a single cell and its contents."""
+        x_pixel = x_grid * self.cell_size
+        y_pixel = y_grid * self.cell_size
         
-        # Draw live metrics overlay
-        if self.pygame_font:
-            y_offset = 5
-            texts_to_render = [
-                f"Generation: {self.current_generation_display_num}",
-                f"Step: {self.current_simulation_step_in_generation}/{SIMULATION_STEPS_PER_GENERATION}",
-                f"Alive Agents: {sum(1 for a in self.schedule.agents if isinstance(a, EvolvingAgent) and a.is_alive)}",
-                f"Food Items: {self.food_items_on_grid}"
-            ]
-            for text_str in texts_to_render:
-                try:
-                    text_surface = self.pygame_font.render(text_str, True, VIS_TEXT_COLOR)
-                    self.screen.blit(text_surface, (5, y_offset))
-                    y_offset += VIS_FONT_SIZE - 5 # Adjust spacing for next line
-                except Exception as e:
-                    print(f"Error rendering text: {e}") # Catch potential font rendering errors
-                    self.pygame_font = None # Disable font on error to prevent spamming
-                    break
+        # Clear the cell
+        cell_rect = pygame.Rect(x_pixel, y_pixel, self.cell_size, self.cell_size)
+        pygame.draw.rect(self.screen, VIS_BACKGROUND_COLOR, cell_rect)
+        
+        # Redraw grid lines for this cell
+        pygame.draw.rect(self.screen, VIS_GRID_COLOR, cell_rect, 1)
+        
+        # Draw agents/food in this cell
+        cell_contents = self.grid.get_cell_list_contents([(x_grid, y_grid)])
+        for agent in cell_contents:
+            if hasattr(agent, 'draw'):
+                agent.draw(self.screen, x_pixel, y_pixel, self.cell_size)
 
-        pygame.display.flip() # Update the full display
+    def _draw_metrics_overlay(self):
+        """Draw the metrics overlay."""
+        if not self.pygame_font:
+            return
+            
+        # Clear the overlay area
+        overlay_height = VIS_FONT_SIZE * 5
+        overlay_rect = pygame.Rect(0, 0, 300, overlay_height)
+        pygame.draw.rect(self.screen, (0, 0, 0, 128), overlay_rect)
+        
+        y_offset = 5
+        texts_to_render = [
+            f"Generation: {self.current_generation_display_num}",
+            f"Step: {self.current_simulation_step_in_generation}/{SIMULATION_STEPS_PER_GENERATION}",
+            f"Alive Agents: {sum(1 for a in self.schedule.agents if isinstance(a, EvolvingAgent) and a.is_alive)}",
+            f"Food Items: {self.food_items_on_grid}"
+        ]
+        for text_str in texts_to_render:
+            try:
+                text_surface = self.pygame_font.render(text_str, True, VIS_TEXT_COLOR)
+                self.screen.blit(text_surface, (5, y_offset))
+                y_offset += VIS_FONT_SIZE - 5
+            except Exception as e:
+                print(f"Error rendering text: {e}")
+                self.pygame_font = None
+                break
 
     def step(self):
         """
@@ -409,11 +512,11 @@ class EvolutionaryWorld(Model):
         if not self.running: # If Mesa simulation itself should stop (e.g., due to Pygame quit)
             return
 
-        # Dynamically spawn more food if it becomes scarce relative to living agents
+        """ # Dynamically spawn more food if it becomes scarce relative to living agents
         living_agents_count = sum(1 for agent in self.schedule.agents if isinstance(agent, EvolvingAgent) and agent.is_alive)
         if living_agents_count > 0 and self.food_items_on_grid < (living_agents_count * 1.5):
              self.spawn_food(num_food_to_spawn=max(1, living_agents_count // 2)) # Spawn at least 1 if needed
-
+ """
         self.schedule.step() # Activate all scheduled agents (calls their step() method)
         self.current_simulation_step_in_generation += 1
 

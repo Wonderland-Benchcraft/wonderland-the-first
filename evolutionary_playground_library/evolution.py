@@ -99,9 +99,15 @@ def evolve_attributes(current_attributes_map, fitness_scores_map,
     num_elites = int(len(population_with_fitness) * elite_size_ratio)
     for i in range(num_elites):
         if i < len(population_with_fitness): # Ensure we don't go out of bounds
-            # Elites are copied directly (or could be cloned if deep copy is needed)
+            # Optimized elite copying - avoid **vars() for better performance
             elite_attr_genome = population_with_fitness[i][1]
-            next_generation_attributes_list.append(AttributeGenome(**vars(elite_attr_genome))) # Create a new instance copy
+            new_elite = AttributeGenome()
+            for attr_name in ['max_hp', 'speed', 'aging_coeff', 'hp_regen_from_food', 
+                             'action_intensity_decay_rate', 'action_hp_cost_factor',
+                             'reproduce_cooldown', 'reproduction_chance', 'reproduce_hp_damage']:
+                if hasattr(elite_attr_genome, attr_name):
+                    setattr(new_elite, attr_name, getattr(elite_attr_genome, attr_name))
+            next_generation_attributes_list.append(new_elite)
 
     # 2. Create the rest of the population using selection, crossover, and mutation
     def tournament_selection(pop, k=3):
@@ -130,8 +136,14 @@ def evolve_attributes(current_attributes_map, fitness_scores_map,
         # Crossover
         if random.random() < crossover_rate:
             child_attrs = AttributeGenome.crossover(parent1_attrs, parent2_attrs)
-        else: # Cloning one parent (or could be mutation only)
-            child_attrs = AttributeGenome(**vars(random.choice([parent1_attrs, parent2_attrs])))
+        else: # Optimized cloning - avoid **vars()
+            parent_to_clone = random.choice([parent1_attrs, parent2_attrs])
+            child_attrs = AttributeGenome()
+            for attr_name in ['max_hp', 'speed', 'aging_coeff', 'hp_regen_from_food', 
+                             'action_intensity_decay_rate', 'action_hp_cost_factor',
+                             'reproduce_cooldown', 'reproduction_chance', 'reproduce_hp_damage']:
+                if hasattr(parent_to_clone, attr_name):
+                    setattr(child_attrs, attr_name, getattr(parent_to_clone, attr_name))
             
         # Mutation
         child_attrs.mutate(mutation_rate=mutation_rate) # Uses default mutation_strength from AttributeGenome

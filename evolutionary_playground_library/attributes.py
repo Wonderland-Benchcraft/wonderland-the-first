@@ -29,15 +29,16 @@ class AttributeGenome:
             action_intensity_decay_rate (float, optional): Rate at which action effectiveness diminishes with age.
             action_hp_cost_factor (float, optional): Base HP cost per unit of action.
         """
-        self.max_hp = max_hp if max_hp is not None else random.uniform(80, 250)
-        self.aging_coeff = aging_coeff if aging_coeff is not None else random.uniform(0.005, 0.02)
-        self.speed = speed if speed is not None else random.uniform(0.8, 1.5)
-        self.hp_regen_from_food = hp_regen_from_food if hp_regen_from_food is not None else random.uniform(15, 35)
-        self.action_intensity_decay_rate = action_intensity_decay_rate if action_intensity_decay_rate is not None else random.uniform(0.005, 0.02)
-        self.action_hp_cost_factor = action_hp_cost_factor if action_hp_cost_factor is not None else random.uniform(0.2, 0.8)
+        self.max_hp = max_hp if max_hp is not None else random.uniform(0.8 * 250, 1.2*250)
+        self.aging_coeff = aging_coeff if aging_coeff is not None else random.uniform(0.005 * 0.8, 0.005 * 1.2)
+        self.speed = speed if speed is not None else random.uniform(0.6*1, 1.4*1)
+        self.hp_regen_from_food = hp_regen_from_food if hp_regen_from_food is not None else random.uniform(0.6*55, 1.4 * 55)
+        self.action_intensity_decay_rate = action_intensity_decay_rate if action_intensity_decay_rate is not None else random.uniform(0.005 * 0.6, 0.005 * 1.4)
+        self.action_hp_cost_factor = action_hp_cost_factor if action_hp_cost_factor is not None else random.uniform( 0.6* 0.15, 1.4 * 0.15)
         self.reproduce_cooldown = reproduce_cooldown if reproduce_cooldown is not None else random.uniform(10, 100)
         self.reproduce_hp_damage = reproduce_hp_damage if reproduce_hp_damage is not None else random.uniform(self.max_hp*0.1, self.max_hp)
-        self.reproduction_chance = reproduction_chance if reproduction_chance is not None else random.uniform(0.0001, 0.005)
+        self.reproduction_chance = reproduction_chance if reproduction_chance is not None else random.uniform(0.0004, 0.001)
+    
     def mutate(self, mutation_rate=0.2, mutation_strength=0.1):
         """
         Mutates the attributes with a given probability and strength.
@@ -59,17 +60,6 @@ class AttributeGenome:
                 # Mutation is a random percentage of the current value, scaled by strength
                 mutation_amount = current_val * mutation_strength * random.uniform(-1, 1)
                 setattr(self, attr_name, current_val + mutation_amount)
-
-        # Clamp values to sensible predefined ranges after mutation to prevent extreme values.
-        self.max_hp = max(30.0, min(self.max_hp, 250.0))
-        self.aging_coeff = max(0.004, min(self.aging_coeff, 0.05))
-        self.speed = max(0.2, min(self.speed, 3.0))
-        self.hp_regen_from_food = max(5.0, min(self.hp_regen_from_food, 60.0))
-        self.action_intensity_decay_rate = max(0.001, min(self.action_intensity_decay_rate, 0.05))
-        self.action_hp_cost_factor = max(0.05, min(self.action_hp_cost_factor, 1.5))
-        self.reproduce_cooldown = max(30, min(self.reproduce_cooldown, 1000))
-        self.reproduce_hp_damage =  max(self.max_hp*0.1, min(self.reproduce_hp_damage, self.max_hp))
-        self.reproduction_chance = max(0.0001, min(self.reproduction_chance, 0.005))
 
     @staticmethod
     def crossover(parent1_attrs, parent2_attrs):

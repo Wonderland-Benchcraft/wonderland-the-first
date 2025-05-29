@@ -52,80 +52,53 @@ class EvolvingAgent(Agent):
     def get_inputs(self):
         """
         Prepares the sensory inputs for the agent's neural network.
-        This method is critical and highly dependent on the simulation's design.
-        Inputs should be normalized to a consistent range (e.g., 0-1 or -1 to 1).
+        Now includes positions of 5 nearest foods and 5 nearest agents.
+        Inputs are normalized to a consistent range (0-1).
 
         Returns:
             tuple: A tuple of input values for the neural network.
         """
-        recon_map = (Food, PostMortemFood)
-        # Normalize HP: current HP / max HP
+        # Basic agent state
         norm_hp = self.hp / self.attribute_genome.max_hp if self.attribute_genome.max_hp > 0 else 0.0
-        norm_hp = max(0.0, min(1.0, norm_hp)) # Clamp between 0 and 1
-
-        # Normalize Age: e.g., cap at 100 steps for normalization
+        norm_hp = max(0.0, min(1.0, norm_hp))
         norm_age = min(1.0, self.age / 100.0)
 
-        # Sensor for nearest food: (dx_normalized, dy_normalized, distance_normalized)
-        (
-            nearest_food_norm_dist,
-            nearest_food_norm_dx,
-            nearest_food_norm_dy,
-            nearest_food_norm_type
-        ) = (1.0, 0.0, 0.0, -1)
+        inputs = [norm_hp, norm_age]
 
-        (
-            nearest_evolving_norm_dist,
-            nearest_evolving_norm_dx,
-            nearest_evolving_norm_dy,
-        ) = (1.0, 0.0, 0.0)
+        if self.pos is None:
+            # Return zeros for all sensory inputs if agent not on grid
+            return tuple(inputs + [0.0] * 38)  # 2 + 5*3 + 5*3 + 5*4 = 40 total inputs
 
-        if self.pos is None: # Agent might have been removed from grid
-            return (
-                norm_hp,
-                norm_age,
-                nearest_food_norm_dist,
-                nearest_food_norm_dx,
-                nearest_food_norm_dy,
-                nearest_food_norm_type,
-                nearest_evolving_norm_dist,
-                nearest_evolving_norm_dx,
-                nearest_evolving_norm_dy,
-            )
-
-        # Iterate through food items on the grid to find the nearest one
-        closest_food, dist = self.model.get_nearest_agent_of_class(self, (Food, PostMortemFood), 20)
-        if closest_food:
-            (
-                nearest_food_norm_dist,
-                nearest_food_norm_dx,
-                nearest_food_norm_dy,
-            ) = self.model.get_norm_distance_betwen_2_positions(closest_food, self, dist)
-
-            for index, food_agent in enumerate(recon_map):
-                if isinstance( closest_food , food_agent):
-                    nearest_food_norm_type = index/len(recon_map)
+        # Get 5 nearest foods (any food type)
+        nearest_foods = self.model.get_nearest_agents_of_class(self, (Food, PostMortemFood), count=5, search_radius=40)
         
-        closest_evolving_agent, agent_dist = self.model.get_nearest_agent_of_class(self, (EvolvingAgent), 30)
-        if closest_evolving_agent:
-            (
-            nearest_evolving_norm_dist,
-            nearest_evolving_norm_dx,
-            nearest_evolving_norm_dy,
-        ) = self.model.get_norm_distance_betwen_2_positions(closest_evolving_agent, self, agent_dist)
+        for i in range(5):
+            if i < len(nearest_foods):
+                food_agent, distance = nearest_foods[i]
+                norm_dist, norm_dx, norm_dy = self.model.get_norm_distance_betwen_2_positions(food_agent, self, distance)
                 
-        # The NEAT config's `num_inputs` must match the number of elements in this tuple.
-        return (
-                norm_hp,
-                norm_age,
-                nearest_food_norm_dist,
-                nearest_food_norm_dx,
-                nearest_food_norm_dy,
-                nearest_food_norm_type,
-                nearest_evolving_norm_dist,
-                nearest_evolving_norm_dx,
-                nearest_evolving_norm_dy,
-            )
+                # Determine food type (0.0 for Food, 1.0 for PostMortemFood)
+                food_type = 1.0 if isinstance(food_agent, PostMortemFood) else 0.0
+                
+                inputs.extend([norm_dist, norm_dx, norm_dy, food_type])
+            else:
+                # No food found at this index - use default values
+                inputs.extend([1.0, 0.0, 0.0, 0.0])
+
+        # Get 5 nearest other agents
+        nearest_agents = self.model.get_nearest_agents_of_class(self, EvolvingAgent, count=5, search_radius=50)
+        
+        for i in range(5):
+            if i < len(nearest_agents):
+                other_agent, distance = nearest_agents[i]
+                norm_dist, norm_dx, norm_dy = self.model.get_norm_distance_betwen_2_positions(other_agent, self, distance)
+                inputs.extend([norm_dist, norm_dx, norm_dy])
+            else:
+                # No agent found at this index - use default values
+                inputs.extend([1.0, 0.0, 0.0])
+
+        # Total inputs: 2 (basic) + 5*4 (foods) + 5*3 (agents) = 37 inputs
+        return tuple(inputs)
 
     def get_current_action_intensity(self, predicted_intensiy):
 
@@ -170,9 +143,14 @@ class EvolvingAgent(Agent):
         if not self.pos:
             return
 
-        # 1. Attribute Genome Cloning and Mutation
-        # Create a new instance by copying attributes, then mutate
-        child_attribute_genome = AttributeGenome(**vars(self.attribute_genome))
+        # 1. Attribute Genome Cloning and Mutation (optimized)
+        # Use direct attribute copying instead of **vars() to reduce memory allocations
+        child_attribute_genome = AttributeGenome()
+        for attr_name in ['max_hp', 'speed', 'aging_coeff', 'hp_regen_from_food', 
+                         'action_intensity_decay_rate', 'action_hp_cost_factor',
+                         'reproduce_cooldown', 'reproduction_chance', 'reproduce_hp_damage']:
+            if hasattr(self.attribute_genome, attr_name):
+                setattr(child_attribute_genome, attr_name, getattr(self.attribute_genome, attr_name))
         child_attribute_genome.mutate(mutation_rate=ATTR_MUTATION_RATE, mutation_strength=ATTR_MUTATION_STRENGTH)
 
         # 2. NEAT Genome Cloning (via crossover with self) and Mutation
@@ -190,7 +168,6 @@ class EvolvingAgent(Agent):
         spawn_pos = self.model.get_random_empty_neighborhood_cell(self.pos)
         if not spawn_pos:
             return
-
 
         self.add_offspring_to_simulation(child_neat_genome, child_attribute_genome, spawn_pos)        
         if self.hp <= 0: self._handle_death()
@@ -253,8 +230,12 @@ class EvolvingAgent(Agent):
 
         # 4. Execute Movement
         if self.pos and (dx != 0 or dy != 0): # Ensure agent is on grid before moving
-            new_pos = (self.pos[0] + dx, self.pos[1] + dy)
-            self.model.grid.move_agent(self, self.model.grid.torus_adj(new_pos)) # Torus grid
+            old_pos = self.pos
+            new_pos = self.model.grid.torus_adj((self.pos[0] + dx, self.pos[1] + dy))
+            self.model.grid.move_agent(self, new_pos) # Torus grid
+            self.model._update_spatial_index(self, old_pos)
+            self.model.dirty_cells.add(old_pos)
+            self.model.dirty_cells.add(new_pos)
 
         # 5. Interact with Environment (e.g., eat food)
         if self.pos: # Check if agent is still on the grid

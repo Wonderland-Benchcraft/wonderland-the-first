@@ -241,40 +241,42 @@ def run_simulation(neat_config_filepath,
     actual_pop_size = neat_configuration.pop_size 
     print(f"NEAT population size: {actual_pop_size}")
 
-    # MODIFIED: Logic to seed population from a saved genome
     if start_from_genome_path and os.path.exists(start_from_genome_path):
         print(f"Attempting to start simulation from saved genome: {start_from_genome_path}")
         try:
             with open(start_from_genome_path, 'rb') as f:
                 loaded_genome = pickle.load(f)
             
-            # Basic compatibility check (can be expanded)
-            if not (loaded_genome.config.input_nodes == neat_configuration.genome_config.input_nodes and \
-                    loaded_genome.config.output_nodes == neat_configuration.genome_config.output_nodes):
-                print("Warning: Loaded genome's input/output node configuration differs from current config. Seeding might be problematic.")
+            genome_to_insert = copy.deepcopy(loaded_genome) # Use a copy
 
-            # Replace the first genome in the new population with the loaded one
+            # --- THIS IS THE CRUCIAL FIX ---
+            # Assign the current run's genome_config to the loaded genome.
+            # neat_configuration is the main neat.Config object for the current run.
+            # neat_configuration.genome_config holds the parameters for genomes.
+            genome_to_insert.config = neat_configuration.genome_config
+            # --- END OF FIX ---
+
+            # Basic compatibility check (can now safely access genome_to_insert.config)
+            if not (genome_to_insert.config.num_inputs == neat_configuration.genome_config.num_inputs and \
+                    genome_to_insert.config.num_outputs == neat_configuration.genome_config.num_outputs):
+                print("Warning: Loaded genome's input/output node count in its *original* config " +
+                      "differs from current config. This might lead to issues if a full compatibility check is not performed. " +
+                      "The genome will now use the current run's config parameters.")
+            # More robust checks could compare `input_keys` and `output_keys` if necessary.
+
             if neat_pop.population: # Ensure population is not empty
-                # Get the ID of the first genome in the newly created population
-                first_genome_id = list(neat_pop.population.keys())[0]
+                ids_to_change = list(neat_pop.population.keys())[0: 2*int(len(neat_pop.population.keys())/3)]
                 
-                # Create a deep copy to avoid modifying the original loaded genome if it's used elsewhere
-                genome_to_insert = copy.deepcopy(loaded_genome)
+                for genome_id in ids_to_change:
+                    print(f"Replacing {int(4*len(neat_pop.population.keys())/4)} genomes")
+                    genome_to_insert_2 = copy.deepcopy(loaded_genome) # Use a copy
+                    genome_to_insert_2.key = genome_id # Assign new key from the current population
+                    genome_to_insert_2.fitness = None # Reset fitness for re-evaluation
                 
-                # Update the key of the loaded genome to match the ID in the new population
-                genome_to_insert.key = first_genome_id
-                # Reset fitness so it's re-evaluated in the new run
-                genome_to_insert.fitness = None 
-                # Ensure its connections and nodes are compatible with the current config
-                # (NEAT usually handles this during speciation/reproduction if structure is valid)
+                    neat_pop.population[genome_id] = genome_to_insert_2
+                    print(f"Successfully replaced genome {genome_id} with loaded genome (now using current config).")
 
-                # Replace the genome in the population
-                neat_pop.population[first_genome_id] = genome_to_insert
-                print(f"Successfully replaced genome {first_genome_id} with loaded genome.")
-
-                # After modifying the population, it's crucial to re-speciate
-                # The generation number for speciation here is 0 as it's the initial setup.
-                neat_pop.species.speciate(neat_configuration, neat_pop.population, 0)
+                neat_pop.species.speciate(neat_configuration, neat_pop.population, neat_pop.generation) # neat_pop.generation is 0 here
                 print("Re-speciated population after inserting loaded genome.")
             else:
                 print("Warning: New population is empty, cannot insert loaded genome.")
@@ -386,7 +388,7 @@ def run_simulation(neat_config_filepath,
 
 
 if __name__ == '__main__':
-    num_nn_inputs = 9
+    num_nn_inputs = 37  # 2 (basic) + 5*4 (foods) + 5*3 (agents) = 37 inputs
     num_nn_outputs = 3
     ensure_neat_config(
         config_path=sim_config.NEAT_CONFIG_FILENAME,
@@ -405,4 +407,4 @@ if __name__ == '__main__':
     run_simulation(
         sim_config.NEAT_CONFIG_FILENAME,
         enable_visualization_param=True,
-        start_from_genome_path="E:\Wonderland\winner_neat_genome.pkl") 
+        start_from_genome_path="winner_neat_genome.pkl") 
