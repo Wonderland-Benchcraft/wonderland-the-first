@@ -4,11 +4,11 @@
 NEAT_CONFIG_FILENAME = "neat_config.txt" # Name of the NEAT config file
 
 # Simulation Core Parameters
-GRID_WIDTH = 200
-GRID_HEIGHT = 140
+GRID_WIDTH = 300
+GRID_HEIGHT = 170
 # INITIAL_AGENT_COUNT is typically set by NEAT's pop_size in the config file.
 # We use a placeholder here if needed before NEAT config is loaded.
-DEFAULT_INITIAL_AGENT_COUNT = 100
+DEFAULT_INITIAL_AGENT_COUNT = 300
 FOOD_SPAWN_PROBABILITY = 0.05
 FOOD_REPRODUCE_PROBABILITY=0.001
 FOOD_REPRODUCE_STEP_AGE=12

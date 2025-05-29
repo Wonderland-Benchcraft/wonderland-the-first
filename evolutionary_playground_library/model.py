@@ -307,6 +307,7 @@ class EvolutionaryWorld(Model):
                             self.grid.place_agent(food, (x, y))
                             self.schedule.add(food) # Add to schedule if food needs to act (not in this case)
                             self.food_items_on_grid += 1
+                            self.dirty_cells.add((x, y))
         else: # Spawn a fixed number of food items
             for _ in range(num_food_to_spawn):
                 # Avoid overpopulating the grid with food
@@ -323,6 +324,7 @@ class EvolutionaryWorld(Model):
                         self.grid.place_agent(food, pos)
                         self.schedule.add(food)
                         self.food_items_on_grid += 1
+                        self.dirty_cells.add(pos)
                         break # Found a spot
                     attempts += 1
 
