@@ -406,5 +406,5 @@ if __name__ == '__main__':
     # To start a fresh simulation:
     run_simulation(
         sim_config.NEAT_CONFIG_FILENAME,
-        enable_visualization_param=True,)
-        #start_from_genome_path="SimulatedGenomes\sim_22_24-05-2025\sim_22_24-05-2025.pkl") 
+        enable_visualization_param=False,
+        start_from_genome_path="winner_neat_genome.pkl") 
